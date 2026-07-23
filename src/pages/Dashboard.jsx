@@ -3,9 +3,10 @@ import { useAuthStore } from '../stores/authStore';
 import { useNavigate } from 'react-router-dom';
 import Mutfak from './Mutfak'; 
 import Istatistikler from "../components/Istatistikler";
-import { LayoutDashboard, ChefHat, Users, LogOut, TrendingUp, ShoppingBag, AlertCircle, BarChart3, Menu, X, Settings, HelpCircle, User as UserIcon, Maximize, Minimize, Utensils, BellRing, Star, ConciergeBell, Receipt, BookOpen, Edit2, Save, Plus, Filter } from 'lucide-react';
+import { LayoutDashboard, ChefHat, Users, LogOut, ShoppingBag, AlertCircle, Menu, X, Settings, HelpCircle, User as UserIcon, Maximize, Minimize, Utensils, BellRing, Star, ConciergeBell, Receipt, BookOpen, Edit2, Save, Plus, Filter, Package } from 'lucide-react';
 import { getDashboardStats } from '../services/dashboardService';
 import { fetchUrunler, fetchKategoriler, addUrun } from '../services/api';
+import api from '../services/api'; // GÜNCELLEME: api nesnesi import edildi
 import toast from 'react-hot-toast';
 
 export default function Dashboard() {
@@ -23,6 +24,10 @@ export default function Dashboard() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [selectedTable, setSelectedTable] = useState(null);
 
+  // GÜNCELLEME: Garsonun boş masaya elden sipariş girebilmesi için sepet durumu
+  const [newOrderTable, setNewOrderTable] = useState(null);
+  const [orderCart, setOrderCart] = useState({}); // { urun_id: adet }
+
   const [activeTab, setActiveTab] = useState(user?.role === 'mutfak' ? 'mutfak' : 'overview');
   
   const [editingItem, setEditingItem] = useState(null);
@@ -34,6 +39,15 @@ export default function Dashboard() {
   // SAHTE VERİLER KALDIRILDI - Gerçek API'den dolması için boş array yapıldı
   const [tables, setTables] = useState([]);
   const [reviews, setReviews] = useState([]);
+
+  // GÜNCELLEME: Stok Yönetimi ekranı için durum değişkenleri
+  const [malzemeler, setMalzemeler] = useState([]);
+  const [isMalzemeLoading, setIsMalzemeLoading] = useState(true);
+  const [sktUyarilari, setSktUyarilari] = useState([]);
+  const [isAddingMalzeme, setIsAddingMalzeme] = useState(false);
+  const [newMalzeme, setNewMalzeme] = useState({ ad: '', birim: '', kritik_seviye: '' });
+  const [stokGirisiMalzeme, setStokGirisiMalzeme] = useState(null);
+  const [stokGirisiForm, setStokGirisiForm] = useState({ miktar: '', skt: '' });
 
   const formatCurrency = (amount) => {
     return new Intl.NumberFormat('tr-TR', {
@@ -52,6 +66,42 @@ export default function Dashboard() {
     if (hour >= 18 && hour < 22) return { text: 'İyi Akşamlar', emoji: '🌆', name: userName };
     return { text: 'İyi Geceler', emoji: '🌙', name: userName };
   }, [user]);
+
+  // GÜNCELLEME: FastAPI'den masaları çekme ve otomatik yenileme (Polling)
+  useEffect(() => {
+    const fetchMasalar = async () => {
+      try {
+        const response = await api.get('/masalar');
+        if (response.data) {
+          setTables(response.data);
+        }
+      } catch (error) {
+        console.error("Masalar çekilirken hata oluştu:", error);
+      }
+    };
+
+    fetchMasalar(); // İlk yüklemede çalışır
+    
+    // Her 5 saniyede bir veritabanını kontrol edip yeni siparişleri ekrana düşürür
+    const interval = setInterval(fetchMasalar, 5000); 
+    return () => clearInterval(interval);
+  }, []);
+
+  // GÜNCELLEME: FastAPI'den müşteri değerlendirmelerini çekme
+  useEffect(() => {
+    const fetchReviews = async () => {
+      try {
+        const response = await api.get('/degerlendirmeler');
+        if (response.data) {
+          setReviews(response.data);
+        }
+      } catch (error) {
+        console.error("Değerlendirmeler çekilirken hata oluştu:", error);
+      }
+    };
+
+    fetchReviews();
+  }, []);
 
   useEffect(() => {
     const fetchStats = async () => {
@@ -107,6 +157,28 @@ export default function Dashboard() {
     loadMenuData();
   }, []);
 
+  // GÜNCELLEME: Malzeme listesi ve SKT uyarılarını çeker. Stok girişi/malzeme ekleme sonrası da tekrar çağrılır.
+  const fetchStokVerileri = async () => {
+    try {
+      setIsMalzemeLoading(true);
+      const [malzemelerRes, sktRes] = await Promise.all([
+        api.get('/malzemeler'),
+        api.get('/malzemeler/skt-uyarilari?gun_esigi=7')
+      ]);
+      setMalzemeler(malzemelerRes.data || []);
+      setSktUyarilari(sktRes.data || []);
+    } catch (err) {
+      console.error("Stok verisi çekme hatası:", err);
+      toast.error("Stok verileri çekilemedi.");
+    } finally {
+      setIsMalzemeLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchStokVerileri();
+  }, []);
+
   const handleLogout = () => {
     logout();
     toast('Görüşmek üzere!', { icon: '👋', style: { background: '#F97316', color: '#fff' } });
@@ -116,10 +188,20 @@ export default function Dashboard() {
   const toggleFullScreen = () => {
     if (!document.fullscreenElement) {
       document.documentElement.requestFullscreen().catch(() => {});
+      setIsFullscreen(true);
     } else {
-      if (document.exitFullscreen) document.exitFullscreen();
+      if (document.exitFullscreen) {
+        document.exitFullscreen();
+        setIsFullscreen(false);
+      }
     }
   };
+
+  useEffect(() => {
+    const handleFSChange = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', handleFSChange);
+    return () => document.removeEventListener('fullscreenchange', handleFSChange);
+  }, []);
 
   const getTableStyle = (status) => {
     switch(status) {
@@ -132,17 +214,109 @@ export default function Dashboard() {
 
   const handleTableClick = (table) => {
     if (table.status === 'bos') {
-      toast('Bu masa şu an boş.', { icon: 'ℹ️' });
+      // GÜNCELLEME: Boş masaya tıklayınca garson artık elden sipariş oluşturabiliyor
+      setOrderCart({});
+      setNewOrderTable(table);
       return;
     }
     setSelectedTable(table);
   };
 
-  const handleSaveMenu = (e) => {
+  // GÜNCELLEME: Sepete ürün ekleme/çıkarma (garsonun elden sipariş girişi için)
+  const handleCartChange = (urunId, delta) => {
+    setOrderCart(prev => {
+      const mevcutAdet = prev[urunId] || 0;
+      const yeniAdet = Math.max(0, mevcutAdet + delta);
+      const guncel = { ...prev };
+      if (yeniAdet === 0) {
+        delete guncel[urunId];
+      } else {
+        guncel[urunId] = yeniAdet;
+      }
+      return guncel;
+    });
+  };
+
+  const cartToplam = Object.entries(orderCart).reduce((toplam, [urunId, adet]) => {
+    const urun = menuItems.find(u => u.id === Number(urunId));
+    return toplam + (urun ? urun.price * adet : 0);
+  }, 0);
+
+  const cartUrunSayisi = Object.values(orderCart).reduce((a, b) => a + b, 0);
+
+  // GÜNCELLEME: Garsonun elden girdiği siparişi backend'e gönderir. kaynak: "garson" olduğu için
+  // masa direkt "dolu" olur, "yeniSiparis" bildirimi tetiklenmez (garson zaten ne sipariş verdiğini biliyor).
+  const handleCreateManualOrder = async () => {
+    if (cartUrunSayisi === 0) {
+      toast.error('Önce sepete ürün ekleyin.');
+      return;
+    }
+    const loadingToast = toast.loading('Sipariş oluşturuluyor...');
+    try {
+      const urunler = Object.entries(orderCart).map(([urun_id, adet]) => ({
+        urun_id: Number(urun_id),
+        adet
+      }));
+      await api.post('/siparisler', {
+        masa_id: newOrderTable.id,
+        urunler,
+        kaynak: 'garson'
+      });
+      toast.success(`${newOrderTable.no} için sipariş oluşturuldu.`, { id: loadingToast });
+      setNewOrderTable(null);
+      setOrderCart({});
+    } catch (error) {
+      console.error("Manuel sipariş oluşturma hatası:", error);
+      toast.error('Sipariş oluşturulamadı, tekrar deneyin.', { id: loadingToast });
+    }
+  };
+
+  // GÜNCELLEME: "yeniSiparis" bildirimini kapatır (sipariş zaten mutfakta, bu sadece garsonun "gördüm" işareti).
+  // Mevcut PUT /api/masalar/{id}/durum endpoint'i yeniden kullanılıyor, backend'de yeni kod gerekmiyor.
+  const handleSiparisiOnayla = async () => {
+    try {
+      await api.put(`/masalar/${selectedTable.id}/durum`, { durum: 'dolu' });
+      toast.success('Sipariş görüldü olarak işaretlendi.');
+      setSelectedTable(null);
+    } catch (error) {
+      console.error("Sipariş onaylama hatası:", error);
+      toast.error('İşlem başarısız, tekrar deneyin.');
+    }
+  };
+
+  // GÜNCELLEME: Sahte "Hesap kapatıldı" mesajı kaldırıldı, gerçek API çağrısına bağlandı.
+  // Backend: PUT /api/masalar/{masa_id}/hesap-kapat -> masadaki tüm aktif siparişleri "odendi" yapar, masayı "bos"a çevirir.
+  const handleHesapKapat = async () => {
+    const loadingToast = toast.loading('Hesap kapatılıyor...');
+    try {
+      await api.put(`/masalar/${selectedTable.id}/hesap-kapat`);
+      toast.success('Hesap kapatıldı.', { id: loadingToast });
+      setSelectedTable(null);
+    } catch (error) {
+      console.error("Hesap kapatma hatası:", error);
+      toast.error('Hesap kapatılamadı, tekrar deneyin.', { id: loadingToast });
+    }
+  };
+
+  const handleSaveMenu = async (e) => {
     e.preventDefault();
-    setMenuItems(menuItems.map(item => item.id === editingItem.id ? editingItem : item));
-    setEditingItem(null);
-    toast.success('Fiyat başarıyla güncellendi!', { duration: 4000 });
+    const loadingToast = toast.loading('Ürün güncelleniyor...');
+    try {
+      const seciliKategori = categories.find(k => k.ad === editingItem.category);
+      const kategori_id = seciliKategori ? seciliKategori.id : 1;
+      await api.put(`/urunler/${editingItem.id}`, {
+        ad: editingItem.name,
+        kategori_id: kategori_id,
+        fiyat: editingItem.price,
+        aciklama: editingItem.desc
+      });
+      setMenuItems(menuItems.map(item => item.id === editingItem.id ? editingItem : item));
+      setEditingItem(null);
+      toast.success('Ürün başarıyla güncellendi!', { id: loadingToast, duration: 4000 });
+    } catch (error) {
+      console.error("Ürün güncelleme hatası:", error);
+      toast.error('Ürün güncellenemedi, tekrar deneyin.', { id: loadingToast });
+    }
   };
 
   const handleAddProduct = async (e) => {
@@ -183,6 +357,47 @@ export default function Dashboard() {
     }
   };
 
+  // GÜNCELLEME: Yeni malzeme tanımlama (Stok Yönetimi ekranı). Stok her zaman 0'dan başlar,
+  // gerçek mal girişi "Stok Ekle" (handleStokGirisi) ile SKT'li parti olarak yapılır.
+  const handleAddMalzeme = async (e) => {
+    e.preventDefault();
+    const loadingToast = toast.loading('Malzeme kaydediliyor...');
+    try {
+      await api.post('/malzemeler', {
+        ad: newMalzeme.ad,
+        stok_miktari: 0,
+        birim: newMalzeme.birim,
+        kritik_seviye: parseFloat(newMalzeme.kritik_seviye) || 0
+      });
+      toast.success(`"${newMalzeme.ad}" malzeme olarak eklendi.`, { id: loadingToast });
+      setIsAddingMalzeme(false);
+      setNewMalzeme({ ad: '', birim: '', kritik_seviye: '' });
+      fetchStokVerileri();
+    } catch (error) {
+      console.error("Malzeme ekleme hatası:", error);
+      toast.error('Malzeme eklenemedi, tekrar deneyin.', { id: loadingToast });
+    }
+  };
+
+  // GÜNCELLEME: Bir malzemeye yeni parti (lot) girişi. SKT girildiyse FEFO/SKT uyarı sistemi bunu izler.
+  const handleStokGirisi = async (e) => {
+    e.preventDefault();
+    const loadingToast = toast.loading('Stok girişi yapılıyor...');
+    try {
+      await api.post(`/malzemeler/${stokGirisiMalzeme.id}/stok-girisi`, {
+        miktar: parseFloat(stokGirisiForm.miktar),
+        skt: stokGirisiForm.skt || null
+      });
+      toast.success(`${stokGirisiMalzeme.ad} için stok girişi yapıldı.`, { id: loadingToast });
+      setStokGirisiMalzeme(null);
+      setStokGirisiForm({ miktar: '', skt: '' });
+      fetchStokVerileri();
+    } catch (error) {
+      console.error("Stok girişi hatası:", error);
+      toast.error('Stok girişi yapılamadı, tekrar deneyin.', { id: loadingToast });
+    }
+  };
+
   return (
     <div className="min-h-screen flex bg-gray-50 font-sans relative overflow-hidden">
       
@@ -214,7 +429,7 @@ export default function Dashboard() {
                 </div>
               )}
               <div className="space-y-4 max-h-60 overflow-y-auto pr-2">
-                {selectedTable.orders.map((order, index) => (
+                {selectedTable.orders?.map((order, index) => (
                   <div key={index} className="flex justify-between items-center border-b border-gray-100 pb-3 last:border-0 last:pb-0">
                     <div className="flex items-center space-x-3">
                       <span className="bg-gray-100 text-gray-700 font-bold px-2 py-1 rounded text-xs">{order.qty}x</span>
@@ -232,13 +447,89 @@ export default function Dashboard() {
 
             <div className="p-4 bg-gray-50 flex gap-3">
               {selectedTable.isCallingWaiter && (
-                <button onClick={() => { toast.success('Garson çağrısı yanıtlandı.'); setSelectedTable(null); }} className="flex-1 bg-blue-100 hover:bg-blue-200 text-blue-700 font-semibold py-3 rounded-xl transition-colors">Çağrıyı Kapat</button>
+                <button onClick={async () => {
+                  const loadingToast = toast.loading('Çağrı kapatılıyor...');
+                  try {
+                    if (selectedTable.cagri_ids?.length > 0) {
+                      await Promise.all(selectedTable.cagri_ids.map(cid =>
+                        api.put(`/garson-cagri/${cid}/tamamla`)
+                      ));
+                    }
+                    toast.success('Garson çağrısı yanıtlandı.', { id: loadingToast });
+                    setSelectedTable(null);
+                  } catch (error) {
+                    console.error("Çağrı kapatma hatası:", error);
+                    toast.error('İşlem başarısız.', { id: loadingToast });
+                  }
+                }} className="flex-1 bg-blue-100 hover:bg-blue-200 text-blue-700 font-semibold py-3 rounded-xl transition-colors">Çağrıyı Kapat</button>
               )}
               {selectedTable.status === 'yeniSiparis' ? (
-                <button onClick={() => { toast.success('Sipariş onaylandı ve mutfağa iletildi!'); setSelectedTable(null); }} className="flex-1 bg-red-500 hover:bg-red-600 text-white font-bold py-3 rounded-xl shadow-md transition-all hover:-translate-y-0.5">Siparişi Onayla</button>
+                <button onClick={handleSiparisiOnayla} className="flex-1 bg-red-500 hover:bg-red-600 text-white font-bold py-3 rounded-xl shadow-md transition-all hover:-translate-y-0.5">Siparişi Onayla</button>
               ) : (
-                <button onClick={() => { toast.success('Hesap kapatıldı.'); setSelectedTable(null); }} className="flex-1 bg-gray-900 hover:bg-gray-800 text-white font-bold py-3 rounded-xl shadow-md transition-all hover:-translate-y-0.5">Hesabı Tahsil Et</button>
+                <button onClick={handleHesapKapat} className="flex-1 bg-gray-900 hover:bg-gray-800 text-white font-bold py-3 rounded-xl shadow-md transition-all hover:-translate-y-0.5">Hesabı Tahsil Et</button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal - Garson Elden Sipariş Oluşturma (Boş Masaya Tıklanınca) */}
+      {newOrderTable && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-gray-900/60 backdrop-blur-sm" onClick={() => setNewOrderTable(null)}></div>
+          <div className="relative bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden animate-in fade-in zoom-in-95 duration-200 flex flex-col max-h-[85vh]">
+            <div className="p-5 flex items-center justify-between border-b bg-gray-50 shrink-0">
+              <div>
+                <h3 className="text-lg font-bold text-gray-900">{newOrderTable.no} için Sipariş Oluştur</h3>
+                <p className="text-xs text-gray-500 mt-0.5">Müşteri QR okutmadan sipariş verdiyse buradan elden girin.</p>
+              </div>
+              <button onClick={() => setNewOrderTable(null)} className="text-gray-400 hover:text-gray-700"><X size={20} /></button>
+            </div>
+
+            <div className="p-4 overflow-y-auto flex-1 space-y-2">
+              {isMenuLoading ? (
+                <p className="text-center text-gray-400 py-8 font-medium">Menü yükleniyor...</p>
+              ) : menuItems.length === 0 ? (
+                <p className="text-center text-gray-400 py-8 font-medium">Menüde ürün bulunmuyor.</p>
+              ) : (
+                menuItems.map((item) => {
+                  const adet = orderCart[item.id] || 0;
+                  return (
+                    <div key={item.id} className={`flex items-center justify-between p-3 rounded-xl border transition-colors ${adet > 0 ? 'border-orange-300 bg-orange-50/50' : 'border-gray-100'}`}>
+                      <div className="flex-1 min-w-0 pr-3">
+                        <p className="font-semibold text-gray-900 text-sm truncate">{item.name}</p>
+                        <p className="text-xs text-gray-500">{item.category} · {formatCurrency(item.price)}</p>
+                      </div>
+                      <div className="flex items-center space-x-2 shrink-0">
+                        <button
+                          onClick={() => handleCartChange(item.id, -1)}
+                          disabled={adet === 0}
+                          className="w-8 h-8 rounded-lg border border-gray-200 text-gray-600 font-bold disabled:opacity-30 hover:bg-gray-100 transition-colors"
+                        >−</button>
+                        <span className="w-6 text-center font-bold text-gray-800">{adet}</span>
+                        <button
+                          onClick={() => handleCartChange(item.id, 1)}
+                          className="w-8 h-8 rounded-lg border border-orange-300 text-orange-600 font-bold hover:bg-orange-100 transition-colors"
+                        >+</button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            <div className="p-4 border-t bg-gray-50 shrink-0 space-y-3">
+              <div className="flex justify-between items-center">
+                <span className="text-sm font-medium text-gray-500">{cartUrunSayisi} ürün seçildi</span>
+                <span className="text-xl font-bold text-gray-900">{formatCurrency(cartToplam)}</span>
+              </div>
+              <button
+                onClick={handleCreateManualOrder}
+                disabled={cartUrunSayisi === 0}
+                className="w-full bg-orange-500 hover:bg-orange-600 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl shadow-md transition-all"
+              >
+                Siparişi Oluştur
+              </button>
             </div>
           </div>
         </div>
@@ -352,6 +643,106 @@ export default function Dashboard() {
         </div>
       )}
 
+      {/* Modal - Yeni Malzeme Ekle (Stok Yönetimi) */}
+      {isAddingMalzeme && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-gray-900/60 backdrop-blur-sm" onClick={() => setIsAddingMalzeme(false)}></div>
+          <div className="relative bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            <div className="p-5 flex items-center justify-between border-b bg-gray-50">
+              <h3 className="text-lg font-bold text-gray-900">Yeni Malzeme Ekle</h3>
+              <button onClick={() => setIsAddingMalzeme(false)} className="text-gray-400 hover:text-gray-700"><X size={20} /></button>
+            </div>
+            <form onSubmit={handleAddMalzeme} className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Malzeme Adı</label>
+                <input
+                  type="text"
+                  placeholder="Örn: Köfte"
+                  value={newMalzeme.ad}
+                  onChange={(e) => setNewMalzeme({...newMalzeme, ad: e.target.value})}
+                  className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Birim</label>
+                <select
+                  value={newMalzeme.birim}
+                  onChange={(e) => setNewMalzeme({...newMalzeme, birim: e.target.value})}
+                  className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-orange-500 bg-white"
+                  required
+                >
+                  <option value="">Seçiniz</option>
+                  <option value="kg">kg (gramaj bazlı - ör: köfte, peynir)</option>
+                  <option value="adet">adet (sayı bazlı - ör: kola, ekmek)</option>
+                  <option value="lt">lt (litre bazlı - ör: yağ, süt)</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Kritik Seviye</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  placeholder="Bu seviyenin altına düşünce uyarı verir"
+                  value={newMalzeme.kritik_seviye}
+                  onChange={(e) => setNewMalzeme({...newMalzeme, kritik_seviye: e.target.value})}
+                  className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  required
+                />
+              </div>
+              <p className="text-xs text-gray-400">Stok miktarı 0 olarak başlar. Mal geldikçe "Stok Ekle" ile SKT'li parti girişi yapılır.</p>
+              <button type="submit" className="w-full flex justify-center items-center space-x-2 bg-orange-500 hover:bg-orange-600 text-white font-bold py-3.5 rounded-xl transition-all shadow-md">
+                <Plus size={20} />
+                <span>Malzemeyi Kaydet</span>
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal - Stok Girişi (Parti/SKT) (Stok Yönetimi) */}
+      {stokGirisiMalzeme && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-gray-900/60 backdrop-blur-sm" onClick={() => setStokGirisiMalzeme(null)}></div>
+          <div className="relative bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            <div className="p-5 flex items-center justify-between border-b bg-gray-50">
+              <div>
+                <h3 className="text-lg font-bold text-gray-900">{stokGirisiMalzeme.ad} - Stok Girişi</h3>
+                <p className="text-xs text-gray-500 mt-0.5">Mevcut stok: {stokGirisiMalzeme.stok_miktari} {stokGirisiMalzeme.birim}</p>
+              </div>
+              <button onClick={() => setStokGirisiMalzeme(null)} className="text-gray-400 hover:text-gray-700"><X size={20} /></button>
+            </div>
+            <form onSubmit={handleStokGirisi} className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Gelen Miktar ({stokGirisiMalzeme.birim})</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  placeholder="Örn: 10"
+                  value={stokGirisiForm.miktar}
+                  onChange={(e) => setStokGirisiForm({...stokGirisiForm, miktar: e.target.value})}
+                  className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-orange-500 font-bold text-orange-600"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Son Kullanma Tarihi (varsa)</label>
+                <input
+                  type="date"
+                  value={stokGirisiForm.skt}
+                  onChange={(e) => setStokGirisiForm({...stokGirisiForm, skt: e.target.value})}
+                  className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                />
+              </div>
+              <button type="submit" className="w-full flex justify-center items-center space-x-2 bg-orange-500 hover:bg-orange-600 text-white font-bold py-3.5 rounded-xl transition-all shadow-md">
+                <Plus size={20} />
+                <span>Stok Girişini Kaydet</span>
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
       {isMobileMenuOpen && (
         <div className="fixed inset-0 bg-gray-800/40 backdrop-blur-sm z-40 md:hidden transition-opacity" onClick={() => setIsMobileMenuOpen(false)} />
       )}
@@ -398,6 +789,17 @@ export default function Dashboard() {
             <button onClick={() => setActiveTab('siparis')} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg font-medium transition-all duration-300 hover:translate-x-1 ${activeTab === 'siparis' ? 'bg-orange-50 text-orange-600' : 'text-gray-500 hover:text-orange-500 hover:bg-orange-50/50'}`}>
               <ShoppingBag size={20} />
               <span>Gelişmiş Sipariş</span>
+            </button>
+          )}
+
+          {/* Sadece ADMİN için Stok Yönetimi */}
+          {user?.role === 'admin' && (
+            <button onClick={() => setActiveTab('stok')} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg font-medium transition-all duration-300 hover:translate-x-1 ${activeTab === 'stok' ? 'bg-orange-50 text-orange-600' : 'text-gray-500 hover:text-orange-500 hover:bg-orange-50/50'}`}>
+              <Package size={20} />
+              <span>Stok Yönetimi</span>
+              {sktUyarilari.length > 0 && (
+                <span className="ml-auto bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">{sktUyarilari.length}</span>
+              )}
             </button>
           )}
         </nav>
@@ -678,6 +1080,106 @@ export default function Dashboard() {
               <ShoppingBag size={64} className="mb-4 opacity-50" />
               <h2 className="text-2xl font-bold text-gray-800 mb-2">Gelişmiş Sipariş Yönetimi</h2>
               <p className="text-gray-500 font-medium">Gelişmiş detay paneli buraya eklenecektir.</p>
+            </div>
+          )}
+
+          {/* STOK YÖNETİMİ EKRANI (Sadece Admin Görebilir) */}
+          {activeTab === 'stok' && (
+            <div className="animate-in fade-in duration-300 space-y-6">
+
+              {/* SKT Uyarıları Paneli */}
+              {sktUyarilari.length > 0 && (
+                <div className="bg-red-50 border border-red-200 rounded-2xl p-5">
+                  <h3 className="text-red-700 font-bold flex items-center mb-3">
+                    <AlertCircle size={20} className="mr-2" />
+                    Son Kullanma Tarihi Yaklaşan Stoklar
+                  </h3>
+                  <div className="space-y-2">
+                    {sktUyarilari.map((uyari) => (
+                      <div key={uyari.parti_id} className="flex justify-between items-center bg-white rounded-xl px-4 py-3 border border-red-100">
+                        <div>
+                          <p className="font-semibold text-gray-900">{uyari.malzeme}</p>
+                          <p className="text-xs text-gray-500">{uyari.kalan_miktar} {uyari.birim} kaldı</p>
+                        </div>
+                        <span className={`text-sm font-bold px-3 py-1 rounded-lg ${uyari.kalan_gun <= 1 ? 'bg-red-500 text-white' : 'bg-orange-100 text-orange-700'}`}>
+                          {uyari.kalan_gun <= 0 ? 'SKT Doldu!' : `${uyari.kalan_gun} gün kaldı`}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Malzeme Listesi */}
+              <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
+                <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
+                  <div>
+                    <h2 className="text-xl font-bold text-gray-900 tracking-tight">Malzeme &amp; Stok Yönetimi</h2>
+                    <p className="text-sm text-gray-500 mt-1">Sipariş verildikçe stoklar buradan otomatik düşer (SKT'si en yakın parti önce).</p>
+                  </div>
+                  <button
+                    onClick={() => setIsAddingMalzeme(true)}
+                    className="flex items-center space-x-2 bg-orange-500 hover:bg-orange-600 text-white px-4 py-2.5 rounded-xl transition-all shadow-sm font-bold text-sm"
+                  >
+                    <Plus size={18} strokeWidth={2.5} />
+                    <span className="hidden sm:inline">Yeni Malzeme Ekle</span>
+                  </button>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wider">
+                        <th className="p-4 font-semibold border-b border-gray-100">Malzeme</th>
+                        <th className="p-4 font-semibold border-b border-gray-100">Stok</th>
+                        <th className="p-4 font-semibold border-b border-gray-100">Kritik Seviye</th>
+                        <th className="p-4 font-semibold border-b border-gray-100">Durum</th>
+                        <th className="p-4 font-semibold border-b border-gray-100 text-right">İşlemler</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100 text-sm">
+                      {isMalzemeLoading ? (
+                        <tr>
+                          <td colSpan="5" className="p-8 text-center text-gray-500 font-semibold animate-pulse">
+                            Stoklar yükleniyor...
+                          </td>
+                        </tr>
+                      ) : malzemeler.length === 0 ? (
+                        <tr>
+                          <td colSpan="5" className="p-8 text-center text-gray-500 font-semibold">
+                            Henüz malzeme eklenmemiş.
+                          </td>
+                        </tr>
+                      ) : (
+                        malzemeler.map((malzeme) => {
+                          const kritik = malzeme.stok_miktari <= malzeme.kritik_seviye;
+                          return (
+                            <tr key={malzeme.id} className="hover:bg-orange-50/30 transition-colors">
+                              <td className="p-4 font-bold text-gray-900">{malzeme.ad}</td>
+                              <td className="p-4 text-gray-700">{malzeme.stok_miktari} {malzeme.birim}</td>
+                              <td className="p-4 text-gray-500">{malzeme.kritik_seviye} {malzeme.birim}</td>
+                              <td className="p-4">
+                                <span className={`px-2.5 py-1 rounded-lg text-xs font-semibold ${kritik ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
+                                  {kritik ? 'Kritik' : 'Normal'}
+                                </span>
+                              </td>
+                              <td className="p-4 text-right">
+                                <button
+                                  onClick={() => { setStokGirisiMalzeme(malzeme); setStokGirisiForm({ miktar: '', skt: '' }); }}
+                                  className="inline-flex items-center space-x-1 bg-white border border-gray-200 text-gray-700 hover:text-orange-600 hover:border-orange-200 hover:bg-orange-50 px-3 py-1.5 rounded-lg transition-all text-xs font-bold shadow-sm"
+                                >
+                                  <Plus size={14} />
+                                  <span>Stok Ekle</span>
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
           )}
 

@@ -1,26 +1,73 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Clock, ChefHat, CheckCircle2, ArrowRight, Trash2, UtensilsCrossed } from 'lucide-react';
 import toast from 'react-hot-toast';
+import api from '../services/api'; 
 
 const Mutfak = () => {
-  // SAHTE VERİLER KALDIRILDI - Gerçek veritabanından çekilmesi için boş array yapıldı
   const [siparisler, setSiparisler] = useState([]);
 
-  const durumGuncelle = (id, yeniDurum, masaNo) => {
+  // FastAPI'den mutfak siparişlerini çekme ve 5 saniyede bir yenileme
+  useEffect(() => {
+    const fetchMutfakSiparisleri = async () => {
+      try {
+        const response = await api.get('/siparisler/mutfak');
+        if (response.data) {
+          setSiparisler(response.data);
+        }
+      } catch (error) {
+        console.error("Mutfak siparişleri çekilemedi:", error);
+      }
+    };
+
+    fetchMutfakSiparisleri(); // İlk yüklemede çalışır
+    
+    // Mutfak ekranına yeni siparişlerin anında düşmesi için polling
+    const interval = setInterval(fetchMutfakSiparisleri, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Durum değiştiğinde FastAPI'ye bilgi gönderme
+  const durumGuncelle = async (id, yeniDurum, masaNo) => {
+    // 1. Arayüzü hızlıca güncelle (Kullanıcı beklememesi için)
     setSiparisler(siparisler.map(siparis => 
       siparis.id === id ? { ...siparis, durum: yeniDurum } : siparis
     ));
 
+    // 2. Bildirim göster
     if (yeniDurum === 'hazirlaniyor') {
       toast.success(`${masaNo} siparişi hazırlanmaya başlandı!`, { icon: '🍳', duration: 3000 });
     } else if (yeniDurum === 'tamamlandi') {
       toast.success(`${masaNo} siparişi hazır! Garsona bildirildi.`, { icon: '🔔', duration: 4000 });
     }
+
+    // 3. Değişikliği veritabanına kaydet
+    try {
+      await api.put(`/siparisler/${id}/durum`, { durum: yeniDurum });
+    } catch (error) {
+      console.error("Veritabanı güncellenemedi:", error);
+    }
   };
 
-  const tamamlananlariTemizle = () => {
+  // GÜNCELLEME: Çöp kutusuna basıldığında siparişlerin 5 sn sonra geri gelmemesi için düzeltildi
+  const tamamlananlariTemizle = async () => {
+    // 1. Önce Hangi siparişlerin tamamlandığını bulalım
+    const silinecekler = siparisler.filter(s => s.durum === 'tamamlandi');
+    if (silinecekler.length === 0) return;
+
+    // 2. Arayüzden anında temizle (Bekleme olmaması için)
     setSiparisler(siparisler.filter(s => s.durum !== 'tamamlandi'));
     toast('Tamamlanan siparişler ekrandan temizlendi.', { icon: '🧹', duration: 3000 });
+
+    // 3. Veritabanında bu siparişlerin durumunu "teslim_edildi" yapalım ki KDS'ye bir daha düşmesin
+    try {
+      await Promise.all(
+        silinecekler.map(s => 
+          api.put(`/siparisler/${s.id}/durum`, { durum: 'teslim_edildi' })
+        )
+      );
+    } catch (error) {
+      console.error("Durumlar 'teslim_edildi' yapılamadı:", error);
+    }
   };
 
   const yeniSiparisler = siparisler.filter(s => s.durum === 'yeni');
