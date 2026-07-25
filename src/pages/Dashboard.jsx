@@ -3,7 +3,7 @@ import { useAuthStore } from '../stores/authStore';
 import { useNavigate } from 'react-router-dom';
 import Mutfak from './Mutfak'; 
 import Istatistikler from "../components/Istatistikler";
-import { LayoutDashboard, ChefHat, Users, LogOut, ShoppingBag, AlertCircle, Menu, X, Settings, HelpCircle, User as UserIcon, Maximize, Minimize, Utensils, BellRing, Star, ConciergeBell, Receipt, BookOpen, Edit2, Save, Plus, Filter, Package } from 'lucide-react';
+import { LayoutDashboard, ChefHat, LogOut, ShoppingBag, AlertCircle, Menu, X, Settings, HelpCircle, User as UserIcon, Maximize, Minimize, Utensils, BellRing, Star, ConciergeBell, Receipt, BookOpen, Edit2, Save, Plus, Filter, Package } from 'lucide-react';
 import { getDashboardStats } from '../services/dashboardService';
 import { fetchUrunler, fetchKategoriler, addUrun } from '../services/api';
 import api from '../services/api'; // GÜNCELLEME: api nesnesi import edildi
@@ -32,7 +32,7 @@ export default function Dashboard() {
   
   const [editingItem, setEditingItem] = useState(null);
   const [isAddingProduct, setIsAddingProduct] = useState(false);
-  const [newItem, setNewItem] = useState({ name: '', category: '', price: '', desc: '' });
+  const [newItem, setNewItem] = useState({ name: '', category: '', price: '', desc: '', image: '' });
   const [reviewFilter, setReviewFilter] = useState('all');
   const [menuItems, setMenuItems] = useState([]);
 
@@ -48,6 +48,20 @@ export default function Dashboard() {
   const [newMalzeme, setNewMalzeme] = useState({ ad: '', birim: '', kritik_seviye: '' });
   const [stokGirisiMalzeme, setStokGirisiMalzeme] = useState(null);
   const [stokGirisiForm, setStokGirisiForm] = useState({ miktar: '', skt: '' });
+
+  // GÜNCELLEME: Sipariş Geçmişi ekranı için durum değişkenleri
+  const [siparisGecmisi, setSiparisGecmisi] = useState([]);
+  const [isGecmisLoading, setIsGecmisLoading] = useState(true);
+  const [gecmisMasaFiltre, setGecmisMasaFiltre] = useState('all');
+  const [gecmisDurumFiltre, setGecmisDurumFiltre] = useState('all');
+  const [gecmisBaslangicTarihi, setGecmisBaslangicTarihi] = useState('');
+  const [gecmisBitisTarihi, setGecmisBitisTarihi] = useState('');
+
+  // GÜNCELLEME: Hesap Ayarları (kullanıcı yönetimi) paneli için durum değişkenleri
+  const [isAccountSettingsOpen, setIsAccountSettingsOpen] = useState(false);
+  const [kullanicilar, setKullanicilar] = useState([]);
+  const [isKullaniciLoading, setIsKullaniciLoading] = useState(true);
+  const [newKullanici, setNewKullanici] = useState({ kullanici_adi: '', sifre: '', rol: 'garson' });
 
   const formatCurrency = (amount) => {
     return new Intl.NumberFormat('tr-TR', {
@@ -142,7 +156,8 @@ export default function Dashboard() {
           name: urun.ad,
           category: kategoriHaritasi[urun.kategori_id] || 'Bilinmeyen',
           price: urun.fiyat,
-          desc: urun.aciklama || '-'
+          desc: urun.aciklama || '-',
+          image: urun.gorsel_url || ''
         }));
 
         setMenuItems(formatlanmisUrunler);
@@ -179,6 +194,23 @@ export default function Dashboard() {
     fetchStokVerileri();
   }, []);
 
+  // GÜNCELLEME: Sipariş Geçmişi verisini çeker (Sipariş Geçmişi sekmesi için)
+  useEffect(() => {
+    const fetchSiparisGecmisi = async () => {
+      try {
+        setIsGecmisLoading(true);
+        const response = await api.get('/siparisler/gecmis');
+        setSiparisGecmisi(response.data || []);
+      } catch (error) {
+        console.error("Sipariş geçmişi çekme hatası:", error);
+        toast.error("Sipariş geçmişi çekilemedi.");
+      } finally {
+        setIsGecmisLoading(false);
+      }
+    };
+    fetchSiparisGecmisi();
+  }, []);
+
   const handleLogout = () => {
     logout();
     toast('Görüşmek üzere!', { icon: '👋', style: { background: '#F97316', color: '#fff' } });
@@ -209,6 +241,71 @@ export default function Dashboard() {
       case 'dolu': return 'bg-orange-50/50 border-orange-400 text-orange-700 shadow-sm';
       case 'yeniSiparis': return 'bg-red-50 border-red-500 text-red-700 shadow-md ring-4 ring-red-500/20'; 
       default: return 'bg-white border-gray-200';
+    }
+  };
+
+  // GÜNCELLEME: Sipariş Geçmişi ekranı için durum rozeti rengi ve okunabilir etiket
+  const gecmisDurumBadge = (durum) => {
+    switch (durum) {
+      case 'yeni': return 'bg-blue-100 text-blue-700';
+      case 'hazirlaniyor': return 'bg-orange-100 text-orange-700';
+      case 'tamamlandi': return 'bg-purple-100 text-purple-700';
+      case 'odendi': return 'bg-green-100 text-green-700';
+      case 'iptal': return 'bg-red-100 text-red-700';
+      default: return 'bg-gray-100 text-gray-700';
+    }
+  };
+
+  const durumEtiketi = (durum) => ({
+    yeni: 'Yeni', hazirlaniyor: 'Hazırlanıyor', tamamlandi: 'Tamamlandı', odendi: 'Ödendi', iptal: 'İptal'
+  }[durum] || durum);
+
+  const filtrelenmisGecmis = siparisGecmisi.filter((s) => {
+    const masaUyuyor = gecmisMasaFiltre === 'all' || String(s.masa_id) === gecmisMasaFiltre;
+    const durumUyuyor = gecmisDurumFiltre === 'all' || s.durum === gecmisDurumFiltre;
+    const baslangicUyuyor = !gecmisBaslangicTarihi || s.tarih_iso >= gecmisBaslangicTarihi;
+    const bitisUyuyor = !gecmisBitisTarihi || s.tarih_iso <= gecmisBitisTarihi;
+    return masaUyuyor && durumUyuyor && baslangicUyuyor && bitisUyuyor;
+  });
+
+  // GÜNCELLEME: Hesap Ayarları paneli - kullanıcı listesini çeker, oluşturur, siler.
+  const fetchKullanicilar = async () => {
+    try {
+      setIsKullaniciLoading(true);
+      const response = await api.get('/kullanicilar');
+      setKullanicilar(response.data || []);
+    } catch (error) {
+      console.error("Kullanıcı listesi çekme hatası:", error);
+      toast.error("Kullanıcı listesi çekilemedi.");
+    } finally {
+      setIsKullaniciLoading(false);
+    }
+  };
+
+  const handleCreateKullanici = async (e) => {
+    e.preventDefault();
+    const loadingToast = toast.loading('Kullanıcı oluşturuluyor...');
+    try {
+      await api.post('/kullanicilar', newKullanici);
+      toast.success(`"${newKullanici.kullanici_adi}" kullanıcısı oluşturuldu.`, { id: loadingToast });
+      setNewKullanici({ kullanici_adi: '', sifre: '', rol: 'garson' });
+      fetchKullanicilar();
+    } catch (error) {
+      console.error("Kullanıcı oluşturma hatası:", error);
+      const mesaj = error?.response?.data?.detail || 'Kullanıcı oluşturulamadı, tekrar deneyin.';
+      toast.error(mesaj, { id: loadingToast });
+    }
+  };
+
+  const handleDeleteKullanici = async (kullanici) => {
+    if (!window.confirm(`"${kullanici.kullanici_adi}" kullanıcısını silmek istediğine emin misin?`)) return;
+    try {
+      await api.delete(`/kullanicilar/${kullanici.id}`);
+      toast.success('Kullanıcı silindi.');
+      fetchKullanicilar();
+    } catch (error) {
+      console.error("Kullanıcı silme hatası:", error);
+      toast.error('Kullanıcı silinemedi, tekrar deneyin.');
     }
   };
 
@@ -308,7 +405,8 @@ export default function Dashboard() {
         ad: editingItem.name,
         kategori_id: kategori_id,
         fiyat: editingItem.price,
-        aciklama: editingItem.desc
+        aciklama: editingItem.desc,
+        gorsel_url: editingItem.image
       });
       setMenuItems(menuItems.map(item => item.id === editingItem.id ? editingItem : item));
       setEditingItem(null);
@@ -332,7 +430,8 @@ export default function Dashboard() {
         ad: newItem.name,
         kategori_id: kategori_id,
         fiyat: parseFloat(newItem.price),
-        aciklama: newItem.desc
+        aciklama: newItem.desc,
+        gorsel_url: newItem.image
       };
 
       const kaydedilenUrun = await addUrun(urunVerisi);
@@ -342,12 +441,13 @@ export default function Dashboard() {
         name: kaydedilenUrun.ad || urunVerisi.ad,
         category: newItem.category, 
         price: kaydedilenUrun.fiyat || urunVerisi.fiyat,
-        desc: kaydedilenUrun.aciklama || urunVerisi.aciklama
+        desc: kaydedilenUrun.aciklama || urunVerisi.aciklama,
+        image: kaydedilenUrun.gorsel_url || urunVerisi.gorsel_url
       };
 
       setMenuItems([productToAdd, ...menuItems]);
       setIsAddingProduct(false);
-      setNewItem({ name: '', category: categories[0]?.ad || 'Burgerler', price: '', desc: '' }); 
+      setNewItem({ name: '', category: categories[0]?.ad || 'Burgerler', price: '', desc: '', image: '' }); 
       
       toast.success(`"${productToAdd.name}" başarıyla menüye eklendi!`, { id: loadingToast, duration: 4000 });
       
@@ -566,9 +666,29 @@ export default function Dashboard() {
                   required
                 />
               </div>
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Görsel URL</label>
+                <div className="flex items-center gap-3">
+                  {editingItem.image ? (
+                    <img src={editingItem.image} alt="" className="w-14 h-14 rounded-xl object-cover border border-gray-200 shrink-0" onError={(e) => { e.target.style.display = 'none'; }} />
+                  ) : (
+                    <div className="w-14 h-14 rounded-xl border border-gray-200 bg-gray-50 flex items-center justify-center text-gray-300 shrink-0">
+                      <Utensils size={20} />
+                    </div>
+                  )}
+                  <input
+                    type="url"
+                    placeholder="https://..."
+                    value={editingItem.image || ''}
+                    onChange={(e) => setEditingItem({...editingItem, image: e.target.value})}
+                    className="flex-1 px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  />
+                </div>
+                <p className="text-xs text-gray-400 mt-1">Bir görsel adresi yapıştır (mobil uygulama aynı alanı okuyor).</p>
+              </div>
               <button type="submit" className="w-full flex justify-center items-center space-x-2 bg-orange-500 hover:bg-orange-600 text-white font-bold py-3.5 rounded-xl transition-all shadow-md">
                 <Save size={20} />
-                <span>Değişiklikleri Arayüzde Kaydet</span>
+                <span>Değişiklikleri Kaydet</span>
               </button>
             </form>
           </div>
@@ -633,6 +753,26 @@ export default function Dashboard() {
                   onChange={(e) => setNewItem({...newItem, desc: e.target.value})}
                   className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-orange-500" 
                 ></textarea>
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Görsel URL</label>
+                <div className="flex items-center gap-3">
+                  {newItem.image ? (
+                    <img src={newItem.image} alt="" className="w-14 h-14 rounded-xl object-cover border border-gray-200 shrink-0" onError={(e) => { e.target.style.display = 'none'; }} />
+                  ) : (
+                    <div className="w-14 h-14 rounded-xl border border-gray-200 bg-gray-50 flex items-center justify-center text-gray-300 shrink-0">
+                      <Utensils size={20} />
+                    </div>
+                  )}
+                  <input
+                    type="url"
+                    placeholder="https://..."
+                    value={newItem.image}
+                    onChange={(e) => setNewItem({...newItem, image: e.target.value})}
+                    className="flex-1 px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  />
+                </div>
+                <p className="text-xs text-gray-400 mt-1">Bir görsel adresi yapıştır (mobil uygulama aynı alanı okuyor).</p>
               </div>
               <button type="submit" className="w-full flex justify-center items-center space-x-2 bg-orange-500 hover:bg-orange-600 text-white font-bold py-3.5 rounded-xl transition-all shadow-md">
                 <Plus size={20} />
@@ -743,6 +883,86 @@ export default function Dashboard() {
         </div>
       )}
 
+      {/* Modal - Hesap Ayarları (Kullanıcı Yönetimi, sadece Admin) */}
+      {isAccountSettingsOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-gray-900/60 backdrop-blur-sm" onClick={() => setIsAccountSettingsOpen(false)}></div>
+          <div className="relative bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden animate-in fade-in zoom-in-95 duration-200 flex flex-col max-h-[85vh]">
+            <div className="p-5 flex items-center justify-between border-b bg-gray-50 shrink-0">
+              <h3 className="text-lg font-bold text-gray-900">Hesap Ayarları — Kullanıcılar</h3>
+              <button onClick={() => setIsAccountSettingsOpen(false)} className="text-gray-400 hover:text-gray-700"><X size={20} /></button>
+            </div>
+
+            <div className="p-5 overflow-y-auto flex-1 space-y-5">
+              <div>
+                <h4 className="text-sm font-bold text-gray-700 mb-2">Mevcut Kullanıcılar</h4>
+                {isKullaniciLoading ? (
+                  <p className="text-sm text-gray-400 py-2">Yükleniyor...</p>
+                ) : kullanicilar.length === 0 ? (
+                  <p className="text-sm text-gray-400 py-2">Henüz kullanıcı yok.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {kullanicilar.map((k) => (
+                      <div key={k.id} className="flex items-center justify-between bg-gray-50 rounded-xl px-4 py-2.5">
+                        <div>
+                          <p className="text-sm font-semibold text-gray-900">{k.kullanici_adi}</p>
+                          <p className="text-xs text-gray-500 capitalize">{k.rol}</p>
+                        </div>
+                        <button
+                          onClick={() => handleDeleteKullanici(k)}
+                          className="text-xs text-red-500 hover:text-red-700 font-semibold px-2 py-1 rounded-lg hover:bg-red-50 transition-colors"
+                        >
+                          Sil
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="border-t border-gray-100 pt-5">
+                <h4 className="text-sm font-bold text-gray-700 mb-3">Yeni Kullanıcı Oluştur</h4>
+                <form onSubmit={handleCreateKullanici} className="space-y-3">
+                  <input
+                    type="text"
+                    placeholder="Kullanıcı adı"
+                    value={newKullanici.kullanici_adi}
+                    onChange={(e) => setNewKullanici({...newKullanici, kullanici_adi: e.target.value})}
+                    className="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                    required
+                  />
+                  <input
+                    type="password"
+                    placeholder="Şifre (en az 4 karakter)"
+                    value={newKullanici.sifre}
+                    onChange={(e) => setNewKullanici({...newKullanici, sifre: e.target.value})}
+                    className="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                    required
+                    minLength={4}
+                  />
+                  <select
+                    value={newKullanici.rol}
+                    onChange={(e) => setNewKullanici({...newKullanici, rol: e.target.value})}
+                    className="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-orange-500 bg-white"
+                  >
+                    <option value="admin">Admin</option>
+                    <option value="mutfak">Mutfak</option>
+                    <option value="garson">Garson</option>
+                  </select>
+                  <button
+                    type="submit"
+                    className="w-full flex justify-center items-center space-x-2 bg-orange-500 hover:bg-orange-600 text-white font-bold py-3 rounded-xl transition-all shadow-md"
+                  >
+                    <Plus size={18} />
+                    <span>Kullanıcı Oluştur</span>
+                  </button>
+                </form>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {isMobileMenuOpen && (
         <div className="fixed inset-0 bg-gray-800/40 backdrop-blur-sm z-40 md:hidden transition-opacity" onClick={() => setIsMobileMenuOpen(false)} />
       )}
@@ -777,18 +997,11 @@ export default function Dashboard() {
             </button>
           )}
 
-          {user?.role === 'admin' && (
-            <button onClick={() => setActiveTab('personel')} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg font-medium transition-all duration-300 hover:translate-x-1 ${activeTab === 'personel' ? 'bg-orange-50 text-orange-600' : 'text-gray-500 hover:text-orange-500 hover:bg-orange-50/50'}`}>
-              <Users size={20} />
-              <span>Personel</span>
-            </button>
-          )}
-
-          {/* Sadece ADMİN için Gelişmiş Sipariş Paneli */}
+          {/* Sadece ADMİN için Sipariş Geçmişi */}
           {user?.role === 'admin' && (
             <button onClick={() => setActiveTab('siparis')} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg font-medium transition-all duration-300 hover:translate-x-1 ${activeTab === 'siparis' ? 'bg-orange-50 text-orange-600' : 'text-gray-500 hover:text-orange-500 hover:bg-orange-50/50'}`}>
-              <ShoppingBag size={20} />
-              <span>Gelişmiş Sipariş</span>
+              <Receipt size={20} />
+              <span>Sipariş Geçmişi</span>
             </button>
           )}
 
@@ -822,7 +1035,7 @@ export default function Dashboard() {
               {greeting.text}, <span className="text-orange-600">{greeting.name}</span> <span className="text-xl">{greeting.emoji}</span>
             </h2>
             <h2 className="text-xl font-semibold text-gray-800 tracking-tight sm:hidden">
-              {activeTab === 'overview' ? 'Genel Bakış' : activeTab === 'menu' ? 'Menü Yönetimi' : activeTab === 'mutfak' ? 'Mutfak Durumu' : activeTab === 'personel' ? 'Personel' : 'Masa Sipariş'}
+              {activeTab === 'overview' ? 'Genel Bakış' : activeTab === 'menu' ? 'Menü Yönetimi' : activeTab === 'mutfak' ? 'Mutfak Durumu' : activeTab === 'stok' ? 'Stok Yönetimi' : activeTab === 'siparis' ? 'Sipariş Geçmişi' : 'Genel Bakış'}
             </h2>
           </div>
           
@@ -849,7 +1062,14 @@ export default function Dashboard() {
                     <p className="text-xs text-gray-500 capitalize">{user?.role} Rolü</p>
                   </div>
                   <button className="w-full flex items-center space-x-3 px-4 py-2.5 text-sm text-gray-600 hover:bg-orange-50 hover:text-orange-600 transition-colors"><UserIcon size={16} /><span>Profilim</span></button>
-                  <button className="w-full flex items-center space-x-3 px-4 py-2.5 text-sm text-gray-600 hover:bg-orange-50 hover:text-orange-600 transition-colors"><Settings size={16} /><span>Hesap Ayarları</span></button>
+                  {user?.role === 'admin' && (
+                    <button
+                      onClick={() => { setIsAccountSettingsOpen(true); setIsProfileMenuOpen(false); fetchKullanicilar(); }}
+                      className="w-full flex items-center space-x-3 px-4 py-2.5 text-sm text-gray-600 hover:bg-orange-50 hover:text-orange-600 transition-colors"
+                    >
+                      <Settings size={16} /><span>Hesap Ayarları</span>
+                    </button>
+                  )}
                   <div className="h-px bg-gray-100 my-1"></div>
                   <button onClick={handleLogout} className="w-full flex items-center space-x-3 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-colors"><LogOut size={16} /><span>Çıkış Yap</span></button>
                 </div>
@@ -1034,8 +1254,19 @@ export default function Dashboard() {
                       menuItems.map((item) => (
                         <tr key={item.id} className="hover:bg-orange-50/30 transition-colors group">
                           <td className="p-4">
-                            <p className="font-bold text-gray-900">{item.name}</p>
-                            <p className="text-xs text-gray-500 mt-0.5 truncate max-w-xs">{item.desc}</p>
+                            <div className="flex items-center gap-3">
+                              {item.image ? (
+                                <img src={item.image} alt="" className="w-10 h-10 rounded-lg object-cover border border-gray-100 shrink-0" onError={(e) => { e.target.style.display = 'none'; }} />
+                              ) : (
+                                <div className="w-10 h-10 rounded-lg border border-gray-100 bg-gray-50 flex items-center justify-center text-gray-300 shrink-0">
+                                  <Utensils size={16} />
+                                </div>
+                              )}
+                              <div>
+                                <p className="font-bold text-gray-900">{item.name}</p>
+                                <p className="text-xs text-gray-500 mt-0.5 truncate max-w-xs">{item.desc}</p>
+                              </div>
+                            </div>
                           </td>
                           <td className="p-4">
                             <span className="bg-gray-100 text-gray-600 px-2.5 py-1 rounded-lg text-xs font-semibold">{item.category}</span>
@@ -1065,21 +1296,108 @@ export default function Dashboard() {
              </div>
           )}
 
-          {/* PERSONEL EKRANI YER TUTUCU */}
-          {activeTab === 'personel' && (
-            <div className="flex flex-col items-center justify-center h-[60vh] text-gray-400 bg-white rounded-3xl border border-gray-100 shadow-sm animate-in fade-in duration-300">
-              <Users size={64} className="mb-4 opacity-50" />
-              <h2 className="text-2xl font-bold text-gray-800 mb-2">Personel Yönetimi</h2>
-              <p className="text-gray-500 font-medium">Bu modül henüz kodlanmadı. Yakında eklenecektir.</p>
-            </div>
-          )}
-
-          {/* MASA SİPARİŞ EKRANI YER TUTUCU (Sadece Admin Görebilir) */}
+          {/* SİPARİŞ GEÇMİŞİ EKRANI (Sadece Admin Görebilir) */}
           {activeTab === 'siparis' && (
-            <div className="flex flex-col items-center justify-center h-[60vh] text-gray-400 bg-white rounded-3xl border border-gray-100 shadow-sm animate-in fade-in duration-300">
-              <ShoppingBag size={64} className="mb-4 opacity-50" />
-              <h2 className="text-2xl font-bold text-gray-800 mb-2">Gelişmiş Sipariş Yönetimi</h2>
-              <p className="text-gray-500 font-medium">Gelişmiş detay paneli buraya eklenecektir.</p>
+            <div className="animate-in fade-in duration-300 space-y-6">
+              <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
+                <div className="p-6 border-b border-gray-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-gray-50/50">
+                  <div>
+                    <h2 className="text-xl font-bold text-gray-900 tracking-tight">Sipariş Geçmişi</h2>
+                    <p className="text-sm text-gray-500 mt-1">Tüm siparişlerin kayıtları, en yeniden eskiye.</p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <select
+                      value={gecmisMasaFiltre}
+                      onChange={(e) => setGecmisMasaFiltre(e.target.value)}
+                      className="px-3 py-2 rounded-xl border border-gray-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                    >
+                      <option value="all">Tüm Masalar</option>
+                      {tables.map((t) => (
+                        <option key={t.id} value={String(t.id)}>{t.no}</option>
+                      ))}
+                    </select>
+                    <select
+                      value={gecmisDurumFiltre}
+                      onChange={(e) => setGecmisDurumFiltre(e.target.value)}
+                      className="px-3 py-2 rounded-xl border border-gray-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                    >
+                      <option value="all">Tüm Durumlar</option>
+                      <option value="yeni">Yeni</option>
+                      <option value="hazirlaniyor">Hazırlanıyor</option>
+                      <option value="tamamlandi">Tamamlandı</option>
+                      <option value="odendi">Ödendi</option>
+                      <option value="iptal">İptal</option>
+                    </select>
+                    <input
+                      type="date"
+                      value={gecmisBaslangicTarihi}
+                      onChange={(e) => setGecmisBaslangicTarihi(e.target.value)}
+                      className="px-3 py-2 rounded-xl border border-gray-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      title="Başlangıç tarihi"
+                    />
+                    <input
+                      type="date"
+                      value={gecmisBitisTarihi}
+                      onChange={(e) => setGecmisBitisTarihi(e.target.value)}
+                      className="px-3 py-2 rounded-xl border border-gray-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      title="Bitiş tarihi"
+                    />
+                    {(gecmisMasaFiltre !== 'all' || gecmisDurumFiltre !== 'all' || gecmisBaslangicTarihi || gecmisBitisTarihi) && (
+                      <button
+                        onClick={() => { setGecmisMasaFiltre('all'); setGecmisDurumFiltre('all'); setGecmisBaslangicTarihi(''); setGecmisBitisTarihi(''); }}
+                        className="px-3 py-2 rounded-xl border border-gray-200 text-sm text-gray-500 hover:text-orange-600 hover:border-orange-200 hover:bg-orange-50 transition-colors font-medium"
+                      >
+                        Filtreleri Temizle
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wider">
+                        <th className="p-4 font-semibold border-b border-gray-100">Masa</th>
+                        <th className="p-4 font-semibold border-b border-gray-100">Tarih</th>
+                        <th className="p-4 font-semibold border-b border-gray-100">Ürünler</th>
+                        <th className="p-4 font-semibold border-b border-gray-100">Tutar</th>
+                        <th className="p-4 font-semibold border-b border-gray-100">Durum</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100 text-sm">
+                      {isGecmisLoading ? (
+                        <tr>
+                          <td colSpan="5" className="p-8 text-center text-gray-500 font-semibold animate-pulse">
+                            Sipariş geçmişi yükleniyor...
+                          </td>
+                        </tr>
+                      ) : filtrelenmisGecmis.length === 0 ? (
+                        <tr>
+                          <td colSpan="5" className="p-8 text-center text-gray-500 font-semibold">
+                            Kayıt bulunamadı.
+                          </td>
+                        </tr>
+                      ) : (
+                        filtrelenmisGecmis.map((s) => (
+                          <tr key={s.id} className="hover:bg-orange-50/30 transition-colors">
+                            <td className="p-4 font-bold text-gray-900">{s.masa}</td>
+                            <td className="p-4 text-gray-500">{s.tarih}</td>
+                            <td className="p-4 text-gray-700 max-w-xs truncate" title={s.urunler.join(', ')}>
+                              {s.urunler.join(', ') || '-'}
+                            </td>
+                            <td className="p-4 font-bold text-gray-900">{formatCurrency(s.toplam_tutar)}</td>
+                            <td className="p-4">
+                              <span className={`px-2.5 py-1 rounded-lg text-xs font-semibold ${gecmisDurumBadge(s.durum)}`}>
+                                {durumEtiketi(s.durum)}
+                              </span>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
           )}
 

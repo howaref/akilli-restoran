@@ -1,35 +1,29 @@
 import { create } from 'zustand';
-import { persist, createJSONStorage } from 'zustand/middleware'; // createJSONStorage eklendi
+import { persist, createJSONStorage } from 'zustand/middleware';
+import api from '../services/api';
 
 export const useAuthStore = create(
   persist(
     (set) => ({
       user: null, // Giriş yapan kullanıcının bilgileri (email, role vb.)
       isAuthenticated: false, // Oturum açık mı?
-      
-      // Giriş fonksiyonu: Girilen e-posta adresine göre rolü dinamik belirler
-      login: async (email, password) => {
+
+      // GÜNCELLEME: Sabit kodlanmış (hardcoded) hesaplar kaldırıldı.
+      // Giriş artık gerçek backend'e (POST /api/login) bağlı, veritabanındaki kullanıcılarla doğrulanıyor.
+      login: async (kullaniciAdi, sifre) => {
         try {
-          // 1. Durum: Yönetici (Admin) Girişi
-          if (email === 'admin@restoran.com' && password === '123456') {
-            set({ user: { role: 'admin', email }, isAuthenticated: true });
-            return true;
-          } 
-          // 2. Durum: Aşçı (Mutfak) Girişi
-          else if (email === 'mutfak@restoran.com' && password === '123456') {
-            set({ user: { role: 'mutfak', email }, isAuthenticated: true });
-            return true;
-          } 
-          // 3. Durum: Garson Girişi
-          else if (email === 'garson@restoran.com' && password === '123456') {
-            set({ user: { role: 'garson', email }, isAuthenticated: true });
-            return true;
-          }
-          
-          return false; // E-posta veya şifre hatalıysa
+          const response = await api.post('/login', {
+            kullanici_adi: kullaniciAdi,
+            sifre: sifre
+          });
+          const { kullanici_adi, rol } = response.data;
+          // Not: Dashboard.jsx ve diğer bileşenler user.email alanını okuyor,
+          // bu yüzden kullanici_adi değeri email alanına yerleştiriliyor (kod tabanını değiştirmemek için).
+          set({ user: { role: rol, email: kullanici_adi }, isAuthenticated: true });
+          return true;
         } catch (error) {
           console.error("Giriş hatası:", error);
-          return false;
+          return false; // Kullanıcı adı veya şifre hatalıysa (401) ya da sunucu hatasıysa
         }
       },
 

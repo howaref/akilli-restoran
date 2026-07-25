@@ -21,7 +21,7 @@ export default function Login() {
       toast.success('Giriş başarılı, yönlendiriliyorsunuz...');
       navigate('/dashboard');
     } else {
-      toast.error('Hatalı e-posta veya şifre!');
+      toast.error('Hatalı kullanıcı adı veya şifre!');
       setIsLoading(false);
     }
   };
@@ -47,9 +47,9 @@ export default function Login() {
         {/* Form Alanı */}
         <form onSubmit={handleSubmit} className="space-y-6">
           <div>
-            <label className="block text-sm font-semibold text-gray-200 mb-2">E-Posta Adresi</label>
+            <label className="block text-sm font-semibold text-gray-200 mb-2">Kullanıcı Adı</label>
             <input
-              type="email"
+              type="text"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               // Inputlar da cama uyumlu yarı saydam ve beyaz metinli yapıldı
