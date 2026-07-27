@@ -1,12 +1,25 @@
-import React, { useState, useEffect } from 'react';
-import { Clock, ChefHat, CheckCircle2, ArrowRight, Trash2, UtensilsCrossed } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Clock, ChefHat, CheckCircle2, ArrowRight, UtensilsCrossed, Volume2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../services/api'; 
 
 const Mutfak = () => {
   const [siparisler, setSiparisler] = useState([]);
+  const [sesAcik, setSesAcik] = useState(false);
+  const oncekiYeniSiparisler = useRef(new Set());
 
-  // FastAPI'den mutfak siparişlerini çekme ve 5 saniyede bir yenileme
+  const sesCal = () => {
+    const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
+    audio.volume = 0.7;
+    audio.play().catch(err => console.log('Ses çalınamadı:', err));
+  };
+
+  const sesiAc = () => {
+    sesCal();
+    setSesAcik(true);
+    toast.success('🔔 Bildirim sesi açıldı!', { duration: 2000 });
+  };
+
   useEffect(() => {
     const fetchMutfakSiparisleri = async () => {
       try {
@@ -19,54 +32,43 @@ const Mutfak = () => {
       }
     };
 
-    fetchMutfakSiparisleri(); // İlk yüklemede çalışır
-    
-    // Mutfak ekranına yeni siparişlerin anında düşmesi için polling
+    fetchMutfakSiparisleri();
     const interval = setInterval(fetchMutfakSiparisleri, 5000);
     return () => clearInterval(interval);
   }, []);
 
-  // Durum değiştiğinde FastAPI'ye bilgi gönderme
+  useEffect(() => {
+    const simdikiYeni = siparisler.filter(s => s.durum === 'yeni');
+    const simdikiYeniIds = new Set(simdikiYeni.map(s => s.id));
+    
+    const yeniEklenenler = [...simdikiYeniIds].filter(id => !oncekiYeniSiparisler.current.has(id));
+    
+    if (sesAcik && yeniEklenenler.length > 0) {
+      sesCal();
+      toast.success(`🛎️ ${yeniEklenenler.length} yeni sipariş geldi!`, { 
+        icon: '🔔', 
+        duration: 4000 
+      });
+    }
+    
+    oncekiYeniSiparisler.current = simdikiYeniIds;
+  }, [siparisler, sesAcik]);
+
   const durumGuncelle = async (id, yeniDurum, masaNo) => {
-    // 1. Arayüzü hızlıca güncelle (Kullanıcı beklememesi için)
     setSiparisler(siparisler.map(siparis => 
       siparis.id === id ? { ...siparis, durum: yeniDurum } : siparis
     ));
 
-    // 2. Bildirim göster
     if (yeniDurum === 'hazirlaniyor') {
       toast.success(`${masaNo} siparişi hazırlanmaya başlandı!`, { icon: '🍳', duration: 3000 });
     } else if (yeniDurum === 'tamamlandi') {
       toast.success(`${masaNo} siparişi hazır! Garsona bildirildi.`, { icon: '🔔', duration: 4000 });
     }
 
-    // 3. Değişikliği veritabanına kaydet
     try {
       await api.put(`/siparisler/${id}/durum`, { durum: yeniDurum });
     } catch (error) {
       console.error("Veritabanı güncellenemedi:", error);
-    }
-  };
-
-  // GÜNCELLEME: Çöp kutusuna basıldığında siparişlerin 5 sn sonra geri gelmemesi için düzeltildi
-  const tamamlananlariTemizle = async () => {
-    // 1. Önce Hangi siparişlerin tamamlandığını bulalım
-    const silinecekler = siparisler.filter(s => s.durum === 'tamamlandi');
-    if (silinecekler.length === 0) return;
-
-    // 2. Arayüzden anında temizle (Bekleme olmaması için)
-    setSiparisler(siparisler.filter(s => s.durum !== 'tamamlandi'));
-    toast('Tamamlanan siparişler ekrandan temizlendi.', { icon: '🧹', duration: 3000 });
-
-    // 3. Veritabanında bu siparişlerin durumunu "teslim_edildi" yapalım ki KDS'ye bir daha düşmesin
-    try {
-      await Promise.all(
-        silinecekler.map(s => 
-          api.put(`/siparisler/${s.id}/durum`, { durum: 'teslim_edildi' })
-        )
-      );
-    } catch (error) {
-      console.error("Durumlar 'teslim_edildi' yapılamadı:", error);
     }
   };
 
@@ -76,10 +78,28 @@ const Mutfak = () => {
 
   return (
     <div className="p-2 md:p-6 min-h-screen bg-gray-50/50">
-      <h1 className="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-2">
-        <ChefHat className="w-8 h-8 text-orange-500" />
-        Mutfak Ekranı (KDS)
-      </h1>
+      <div className="flex justify-between items-center mb-6">
+        <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
+          <ChefHat className="w-8 h-8 text-orange-500" />
+          Mutfak Ekranı (KDS)
+        </h1>
+        
+        {!sesAcik && (
+          <button
+            onClick={sesiAc}
+            className="flex items-center gap-2 bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-xl font-bold transition-all shadow-sm"
+          >
+            <Volume2 className="w-5 h-5" />
+            🔊 Bildirim Sesini Aç
+          </button>
+        )}
+        {sesAcik && (
+          <span className="flex items-center gap-2 text-green-600 font-bold bg-green-50 px-4 py-2 rounded-xl border border-green-200">
+            <Volume2 className="w-5 h-5" />
+            Ses Açık
+          </span>
+        )}
+      </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         
@@ -169,23 +189,15 @@ const Mutfak = () => {
 
         {/* KOLON 3: TAMAMLANDI */}
         <div className="bg-emerald-50/50 p-4 rounded-2xl border border-emerald-100 shadow-sm relative">
-          <div className="flex justify-between items-center mb-4">
+          <div className="flex justify-between items-center mb-1">
             <h2 className="text-lg font-bold text-emerald-700 flex items-center gap-2">
               Tamamlandı
               <span className="bg-emerald-500 text-white font-bold py-1 px-3 rounded-full text-sm shadow-sm">
                 {tamamlananlar.length}
               </span>
             </h2>
-            {tamamlananlar.length > 0 && (
-              <button 
-                onClick={tamamlananlariTemizle}
-                title="Listeyi Temizle"
-                className="text-emerald-600 hover:text-emerald-800 bg-emerald-100 hover:bg-emerald-200 p-1.5 rounded-lg transition-colors"
-              >
-                <Trash2 size={18} />
-              </button>
-            )}
           </div>
+          <p className="text-xs text-emerald-600/70 mb-3 font-medium">Garson masaya götürüp "Teslim Ettim" dediğinde otomatik kalkar.</p>
           
           <div className="space-y-4">
             {tamamlananlar.map(siparis => (

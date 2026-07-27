@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import { useAuthStore } from '../stores/authStore';
 import { useNavigate } from 'react-router-dom';
 import Mutfak from './Mutfak'; 
@@ -29,6 +29,19 @@ export default function Dashboard() {
   const [orderCart, setOrderCart] = useState({}); // { urun_id: adet }
 
   const [activeTab, setActiveTab] = useState(user?.role === 'mutfak' ? 'mutfak' : 'overview');
+
+  // GÜNCELLEME: Garson için ses bildirimi - "Sipariş Hazır" olunca çalar
+  const [sesAcik, setSesAcik] = useState(false);
+  const oncekiHazirMasalar = useRef(new Set());
+  const sesCalGarson = () => {
+    const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2003/2003-preview.mp3');
+    audio.volume = 0.7;
+    audio.play().catch(err => console.log('Ses çalınamadı:', err));
+  };
+  const sesiAcGarson = () => {
+    sesCalGarson();
+    setSesAcik(true);
+  };
   
   const [editingItem, setEditingItem] = useState(null);
   const [isAddingProduct, setIsAddingProduct] = useState(false);
@@ -100,6 +113,17 @@ export default function Dashboard() {
     const interval = setInterval(fetchMasalar, 5000); 
     return () => clearInterval(interval);
   }, []);
+
+  // GÜNCELLEME: Garson ekranı - yeni bir masa "hazirSiparis" olunca ses çalar
+  useEffect(() => {
+    const simdikiHazirIds = new Set(tables.filter(t => t.status === 'hazirSiparis').map(t => t.id));
+    const yeniHazirler = [...simdikiHazirIds].filter(id => !oncekiHazirMasalar.current.has(id));
+    if (sesAcik && yeniHazirler.length > 0) {
+      sesCalGarson();
+      toast.success(`🍽️ ${yeniHazirler.length} masanın siparişi hazır!`, { duration: 4000 });
+    }
+    oncekiHazirMasalar.current = simdikiHazirIds;
+  }, [tables, sesAcik]);
 
   // GÜNCELLEME: FastAPI'den müşteri değerlendirmelerini çekme
   useEffect(() => {
@@ -240,6 +264,7 @@ export default function Dashboard() {
       case 'bos': return 'bg-white border-gray-200 hover:border-gray-300 text-gray-400';
       case 'dolu': return 'bg-orange-50/50 border-orange-400 text-orange-700 shadow-sm';
       case 'yeniSiparis': return 'bg-red-50 border-red-500 text-red-700 shadow-md ring-4 ring-red-500/20'; 
+      case 'hazirSiparis': return 'bg-green-50 border-green-500 text-green-700 shadow-md ring-4 ring-green-500/20';
       default: return 'bg-white border-gray-200';
     }
   };
@@ -395,6 +420,20 @@ export default function Dashboard() {
     }
   };
 
+  // YENİ: Garson siparişi masaya fiziksel olarak götürüp teslim ettiğinde çağrılır.
+  // Backend: PUT /api/masalar/{masa_id}/teslim-et -> "tamamlandi" siparişleri "teslim_edildi" yapar, masayı "dolu"ya döndürür.
+  const handleTeslimEt = async () => {
+    const loadingToast = toast.loading('Teslim işaretleniyor...');
+    try {
+      await api.put(`/masalar/${selectedTable.id}/teslim-et`);
+      toast.success('Sipariş teslim edildi olarak işaretlendi.', { id: loadingToast });
+      setSelectedTable(null);
+    } catch (error) {
+      console.error("Teslim etme hatası:", error);
+      toast.error('İşlem başarısız, tekrar deneyin.', { id: loadingToast });
+    }
+  };
+
   const handleSaveMenu = async (e) => {
     e.preventDefault();
     const loadingToast = toast.loading('Ürün güncelleniyor...');
@@ -506,15 +545,15 @@ export default function Dashboard() {
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-gray-900/60 backdrop-blur-sm" onClick={() => setSelectedTable(null)}></div>
           <div className="relative bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-            <div className={`p-5 flex items-center justify-between border-b ${selectedTable.status === 'yeniSiparis' ? 'bg-red-50 border-red-100' : 'bg-orange-50 border-orange-100'}`}>
+            <div className={`p-5 flex items-center justify-between border-b ${selectedTable.status === 'yeniSiparis' ? 'bg-red-50 border-red-100' : selectedTable.status === 'hazirSiparis' ? 'bg-green-50 border-green-100' : 'bg-orange-50 border-orange-100'}`}>
               <div className="flex items-center space-x-3">
-                <div className={`p-2 rounded-xl ${selectedTable.status === 'yeniSiparis' ? 'bg-red-500 text-white' : 'bg-orange-500 text-white'}`}>
+                <div className={`p-2 rounded-xl ${selectedTable.status === 'yeniSiparis' ? 'bg-red-500 text-white' : selectedTable.status === 'hazirSiparis' ? 'bg-green-500 text-white' : 'bg-orange-500 text-white'}`}>
                   <Receipt size={24} />
                 </div>
                 <div>
                   <h3 className="text-xl font-bold text-gray-900">{selectedTable.no} Adisyonu</h3>
-                  <p className={`text-xs font-semibold uppercase tracking-wider ${selectedTable.status === 'yeniSiparis' ? 'text-red-600' : 'text-orange-600'}`}>
-                    {selectedTable.status === 'yeniSiparis' ? '🚨 Yeni Sipariş Bekliyor' : 'Dolu Masa'}
+                  <p className={`text-xs font-semibold uppercase tracking-wider ${selectedTable.status === 'yeniSiparis' ? 'text-red-600' : selectedTable.status === 'hazirSiparis' ? 'text-green-600' : 'text-orange-600'}`}>
+                    {selectedTable.status === 'yeniSiparis' ? '🚨 Yeni Sipariş Bekliyor' : selectedTable.status === 'hazirSiparis' ? '✅ Sipariş Hazır, Masaya Götür!' : 'Dolu Masa'}
                   </p>
                 </div>
               </div>
@@ -565,6 +604,8 @@ export default function Dashboard() {
               )}
               {selectedTable.status === 'yeniSiparis' ? (
                 <button onClick={handleSiparisiOnayla} className="flex-1 bg-red-500 hover:bg-red-600 text-white font-bold py-3 rounded-xl shadow-md transition-all hover:-translate-y-0.5">Siparişi Onayla</button>
+              ) : selectedTable.status === 'hazirSiparis' ? (
+                <button onClick={handleTeslimEt} className="flex-1 bg-green-500 hover:bg-green-600 text-white font-bold py-3 rounded-xl shadow-md transition-all hover:-translate-y-0.5">Teslim Ettim</button>
               ) : (
                 <button onClick={handleHesapKapat} className="flex-1 bg-gray-900 hover:bg-gray-800 text-white font-bold py-3 rounded-xl shadow-md transition-all hover:-translate-y-0.5">Hesabı Tahsil Et</button>
               )}
@@ -1040,6 +1081,19 @@ export default function Dashboard() {
           </div>
           
           <div className="flex items-center space-x-4 md:space-x-6 relative">
+            {(user?.role === 'admin' || user?.role === 'garson') && !sesAcik && (
+              <button
+                onClick={sesiAcGarson}
+                className="flex items-center gap-2 bg-blue-500 hover:bg-blue-600 text-white px-3 py-1.5 rounded-lg font-bold text-xs transition-all shadow-sm"
+              >
+                🔊 Ses Aç
+              </button>
+            )}
+            {(user?.role === 'admin' || user?.role === 'garson') && sesAcik && (
+              <span className="flex items-center gap-1 text-green-600 font-bold bg-green-50 px-3 py-1.5 rounded-lg border border-green-200 text-xs">
+                🔊 Açık
+              </span>
+            )}
             <button onClick={toggleFullScreen} className="text-gray-500 hover:text-orange-500 transition-colors p-2 rounded-lg hover:bg-orange-50 hidden sm:block">
               {isFullscreen ? <Minimize size={20} /> : <Maximize size={20} />}
             </button>
@@ -1108,6 +1162,7 @@ export default function Dashboard() {
                       <span className="flex items-center"><span className="w-2.5 h-2.5 rounded-full bg-gray-300 mr-2"></span>Boş</span>
                       <span className="flex items-center"><span className="w-2.5 h-2.5 rounded-full bg-orange-500 mr-2"></span>Dolu</span>
                       <span className="flex items-center"><span className="w-2.5 h-2.5 rounded-full bg-red-500 mr-2 animate-pulse"></span>Yeni Sipariş</span>
+                      <span className="flex items-center"><span className="w-2.5 h-2.5 rounded-full bg-green-500 mr-2 animate-pulse"></span>Sipariş Hazır</span>
                       <span className="flex items-center"><span className="w-2.5 h-2.5 rounded-full bg-blue-500 mr-2"></span>Garson Çağrısı</span>
                     </div>
                   </div>
@@ -1125,6 +1180,7 @@ export default function Dashboard() {
                         <div key={table.id} onClick={() => handleTableClick(table)} className={`relative p-5 rounded-2xl border-2 transition-all duration-300 cursor-pointer hover:-translate-y-1 flex flex-col items-center justify-center text-center ${getTableStyle(table.status)}`}>
                           {table.isCallingWaiter && <div className="absolute -top-3 -left-3 bg-blue-500 text-white p-2 rounded-full shadow-lg animate-bounce" title="Müşteri Garson Çağırıyor!"><ConciergeBell size={16} /></div>}
                           {table.status === 'yeniSiparis' && <div className="absolute -top-3 -right-3 bg-red-500 text-white p-2 rounded-full shadow-lg animate-bounce" title="Yeni Sipariş Var!"><BellRing size={16} className="animate-pulse" /></div>}
+                          {table.status === 'hazirSiparis' && <div className="absolute -top-3 -right-3 bg-green-500 text-white p-2 rounded-full shadow-lg animate-bounce" title="Sipariş Hazır, Masaya Götür!"><BellRing size={16} className="animate-pulse" /></div>}
                           
                           <Utensils size={28} className="mb-3 opacity-80" strokeWidth={1.5} />
                           <h4 className="font-bold text-lg mb-1">{table.no}</h4>
